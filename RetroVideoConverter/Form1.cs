@@ -11,6 +11,8 @@ namespace RetroVideoConverter
     public partial class Form1 : Form
     {
         private readonly List<string> _files = new List<string>();
+        private readonly List<EncoderOption> _allEncoders = new List<EncoderOption>();
+
         private readonly EncoderDiscoveryService _encoderDiscoveryService = new EncoderDiscoveryService();
         private readonly FFprobeService _ffprobeService = new FFprobeService();
         private readonly FFmpegService _ffmpegService = new FFmpegService();
@@ -35,14 +37,15 @@ namespace RetroVideoConverter
         {
             InitializeComponent();
 
-            // Подписка на события кнопок
             btnAddFiles.Click += btnAddFiles_Click;
             btnRemoveSelected.Click += btnRemoveSelected_Click;
             btnBrowseOutput.Click += btnBrowseOutput_Click;
             btnRefreshEncoders.Click += btnRefreshEncoders_Click;
             btnConvert.Click += btnConvert_Click;
 
-            // загрузка значений
+            cmbFormat.SelectedIndexChanged += cmbFormat_SelectedIndexChanged;
+            cmbResolution.SelectedIndexChanged += cmbResolution_SelectedIndexChanged;
+
             LoadDefaults();
         }
 
@@ -56,21 +59,18 @@ namespace RetroVideoConverter
             cmbFormat.Items.Add(new FormatOption { Name = "MP4", Extension = "mp4" });
             cmbFormat.Items.Add(new FormatOption { Name = "AVI", Extension = "avi" });
 
-            if (cmbFormat.Items.Count > 0)
-                cmbFormat.SelectedIndex = 0;
-
-            cmbResolution.Items.Clear();
-
             cmbResolution.Items.Add(new ResolutionPreset { Name = "96p", MaxWidth = 128, MaxHeight = 96 });
             cmbResolution.Items.Add(new ResolutionPreset { Name = "144p", MaxWidth = 176, MaxHeight = 144 });
             cmbResolution.Items.Add(new ResolutionPreset { Name = "240p", MaxWidth = 320, MaxHeight = 240 });
+            cmbResolution.Items.Add(new ResolutionPreset { Name = "288p", MaxWidth = 352, MaxHeight = 288 });
             cmbResolution.Items.Add(new ResolutionPreset { Name = "360p", MaxWidth = 480, MaxHeight = 360 });
             cmbResolution.Items.Add(new ResolutionPreset { Name = "480p", MaxWidth = 640, MaxHeight = 480 });
 
-            cmbResolution.SelectedIndex = 2;
+            if (cmbFormat.Items.Count > 0)
+                cmbFormat.SelectedIndex = 0;
 
             if (cmbResolution.Items.Count > 0)
-                cmbResolution.SelectedIndex = 1;
+                cmbResolution.SelectedIndex = 2;
 
             chkKeepAspect.Checked = true;
 
@@ -83,6 +83,7 @@ namespace RetroVideoConverter
         private void RefreshEncoders()
         {
             cmbVideoEncoder.Items.Clear();
+            _allEncoders.Clear();
 
             if (!File.Exists(FfmpegPath))
             {
@@ -95,18 +96,119 @@ namespace RetroVideoConverter
             int i;
             for (i = 0; i < encoders.Count; i++)
             {
-                cmbVideoEncoder.Items.Add(encoders[i]);
+                _allEncoders.Add(encoders[i]);
+            }
+
+            RebuildEncoderList();
+
+            if (cmbVideoEncoder.Items.Count > 0)
+                Log("Загружены только подходящие кодеки для текущих настроек.");
+            else
+                Log("Нет кодеков, подходящих для выбранного формата и разрешения.");
+        }
+
+        private void RebuildEncoderList()
+        {
+            cmbVideoEncoder.Items.Clear();
+
+            FormatOption format = cmbFormat.SelectedItem as FormatOption;
+            ResolutionPreset preset = cmbResolution.SelectedItem as ResolutionPreset;
+
+            if (format == null || preset == null)
+                return;
+
+            int i;
+            for (i = 0; i < _allEncoders.Count; i++)
+            {
+                EncoderOption encoder = _allEncoders[i];
+
+                if (IsEncoderAllowed(format.Extension, preset, encoder))
+                {
+                    cmbVideoEncoder.Items.Add(encoder);
+                }
             }
 
             if (cmbVideoEncoder.Items.Count > 0)
-            {
                 cmbVideoEncoder.SelectedIndex = 0;
-                Log("Загружены только реально доступные кодеки для текущего ПК.");
-            }
-            else
+        }
+
+        private bool IsEncoderAllowed(string extension, ResolutionPreset preset, EncoderOption encoder)
+        {
+            string format = extension.ToLowerInvariant();
+            string name = encoder.EncoderName.ToLowerInvariant();
+
+            if (format == "3gp")
             {
-                Log("Не найдено ни одного подходящего кодека.");
+                if (name == "h263")
+                {
+                    return IsValidH263Size(preset.MaxWidth, preset.MaxHeight);
+                }
+
+                if (name == "mpeg4")
+                    return true;
+
+                return false;
             }
+
+            if (format == "mp4")
+            {
+                if (name == "libx264")
+                    return true;
+
+                if (name == "mpeg4")
+                    return true;
+
+                if (name == "h264_nvenc")
+                    return true;
+
+                if (name == "h264_qsv")
+                    return true;
+
+                if (name == "h264_amf")
+                    return true;
+
+                return false;
+            }
+
+            if (format == "avi")
+            {
+                if (name == "mpeg4")
+                    return true;
+
+                return false;
+            }
+
+            return false;
+        }
+
+        private bool IsValidH263Size(int width, int height)
+        {
+            if (width == 128 && height == 96)
+                return true;
+
+            if (width == 176 && height == 144)
+                return true;
+
+            if (width == 352 && height == 288)
+                return true;
+
+            if (width == 704 && height == 576)
+                return true;
+
+            if (width == 1408 && height == 1152)
+                return true;
+
+            return false;
+        }
+
+        private void cmbFormat_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            RebuildEncoderList();
+        }
+
+        private void cmbResolution_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            RebuildEncoderList();
         }
 
         private void btnAddFiles_Click(object sender, EventArgs e)
@@ -119,7 +221,9 @@ namespace RetroVideoConverter
                 if (ofd.ShowDialog() != DialogResult.OK)
                     return;
 
+                int addedCount = 0;
                 int i;
+
                 for (i = 0; i < ofd.FileNames.Length; i++)
                 {
                     string file = ofd.FileNames[i];
@@ -133,9 +237,10 @@ namespace RetroVideoConverter
                     string folder = Path.GetDirectoryName(file);
 
                     lstFiles.Items.Add(fileName + " (" + folder + ")");
+                    addedCount++;
                 }
 
-                Log("Добавлено файлов: " + ofd.FileNames.Length);
+                Log("Добавлено файлов: " + addedCount);
             }
         }
 
@@ -173,7 +278,6 @@ namespace RetroVideoConverter
 
         private async void btnConvert_Click(object sender, EventArgs e)
         {
-
             if (_files.Count == 0)
             {
                 MessageBox.Show("Добавь хотя бы один файл.");
@@ -222,6 +326,12 @@ namespace RetroVideoConverter
             if (encoder == null)
             {
                 MessageBox.Show("Выбери видеокодек.");
+                return;
+            }
+
+            if (!IsEncoderAllowed(format.Extension, preset, encoder))
+            {
+                MessageBox.Show("Выбранный кодек не подходит для текущего формата или разрешения.");
                 return;
             }
 
