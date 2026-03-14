@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace RetroVideoConverter.Services
@@ -10,7 +12,8 @@ namespace RetroVideoConverter.Services
         public Task<int> ConvertAsync(
             string ffmpegPath,
             string arguments,
-            Action<string> onLog)
+            Action<string> onLog,
+            Action<double> onProgressSeconds)
         {
             if (!File.Exists(ffmpegPath))
                 throw new FileNotFoundException("ffmpeg.exe not found", ffmpegPath);
@@ -27,6 +30,8 @@ namespace RetroVideoConverter.Services
                     CreateNoWindow = true
                 };
 
+                Regex timeRegex = new Regex(@"time=(\d{2}:\d{2}:\d{2}\.\d{2})");
+
                 using (var process = new Process())
                 {
                     process.StartInfo = psi;
@@ -39,8 +44,17 @@ namespace RetroVideoConverter.Services
 
                     process.ErrorDataReceived += (s, e) =>
                     {
-                        if (!string.IsNullOrWhiteSpace(e.Data))
-                            onLog(e.Data);
+                        if (string.IsNullOrWhiteSpace(e.Data))
+                            return;
+
+                        onLog(e.Data);
+
+                        Match match = timeRegex.Match(e.Data);
+                        if (match.Success)
+                        {
+                            double seconds = ParseTimeToSeconds(match.Groups[1].Value);
+                            onProgressSeconds(seconds);
+                        }
                     };
 
                     process.Start();
@@ -51,6 +65,15 @@ namespace RetroVideoConverter.Services
                     return process.ExitCode;
                 }
             });
+        }
+
+        private double ParseTimeToSeconds(string value)
+        {
+            TimeSpan ts;
+            if (TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out ts))
+                return ts.TotalSeconds;
+
+            return 0.0;
         }
     }
 }

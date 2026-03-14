@@ -1,4 +1,5 @@
-﻿using RetroVideoConverter.Helpers;
+﻿using MetroFramework.Forms;
+using RetroVideoConverter.Helpers;
 using RetroVideoConverter.Models;
 using RetroVideoConverter.Services;
 using System;
@@ -8,7 +9,7 @@ using System.Windows.Forms;
 
 namespace RetroVideoConverter
 {
-    public partial class Form1 : Form
+    public partial class Form1 : MetroForm
     {
         private readonly List<string> _files = new List<string>();
         private readonly List<EncoderOption> _allEncoders = new List<EncoderOption>();
@@ -37,10 +38,6 @@ namespace RetroVideoConverter
         {
             InitializeComponent();
 
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
-            this.MinimumSize = this.Size;
-            this.MaximumSize = this.Size;
 
             btnAddFiles.Click += btnAddFiles_Click;
             btnRemoveSelected.Click += btnRemoveSelected_Click;
@@ -50,6 +47,8 @@ namespace RetroVideoConverter
 
             cmbFormat.SelectedIndexChanged += cmbFormat_SelectedIndexChanged;
             cmbResolution.SelectedIndexChanged += cmbResolution_SelectedIndexChanged;
+
+            btnPreview.Click += btnPreview_Click;
 
             LoadDefaults();
         }
@@ -285,71 +284,89 @@ namespace RetroVideoConverter
         {
             if (_files.Count == 0)
             {
-                MessageBox.Show("Добавь хотя бы один файл.");
+                MessageInfo.Show("Добавь хотя бы один файл.", "Info");
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(txtOutputFolder.Text))
             {
-                MessageBox.Show("Укажи выходную папку.");
+                MessageInfo.Show("Укажи выходную папку.", "Info");
                 return;
             }
 
             if (!Directory.Exists(txtOutputFolder.Text))
             {
-                MessageBox.Show("Выходная папка не существует.");
+                MessageError.Show("Выходная папка не существует.", "Error");
                 return;
             }
 
             if (!File.Exists(FfmpegPath))
             {
-                MessageBox.Show("Не найден ffmpeg.exe в папке Tools.");
+                MessageError.Show("Не найден ffmpeg.exe в папке Tools.", "Error");
                 return;
             }
 
             if (!File.Exists(FFprobePath))
             {
-                MessageBox.Show("Не найден ffprobe.exe в папке Tools.");
+                MessageError.Show("Не найден ffprobe.exe в папке Tools.", "Error");
                 return;
             }
 
             FormatOption format = cmbFormat.SelectedItem as FormatOption;
             if (format == null)
             {
-                MessageBox.Show("Выбери формат.");
+                MessageInfo.Show("Выбери формат.", "Info");
                 return;
             }
 
             ResolutionPreset preset = cmbResolution.SelectedItem as ResolutionPreset;
             if (preset == null)
             {
-                MessageBox.Show("Выбери разрешение.");
+                MessageInfo.Show("Выбери разрешение.", "Info");
                 return;
             }
 
             EncoderOption encoder = cmbVideoEncoder.SelectedItem as EncoderOption;
             if (encoder == null)
             {
-                MessageBox.Show("Выбери видеокодек.");
+                MessageInfo.Show("Выбери видеокодек.", "Info");
                 return;
             }
 
             if (!IsEncoderAllowed(format.Extension, preset, encoder))
             {
-                MessageBox.Show("Выбранный кодек не подходит для текущего формата или разрешения.");
+                MessageWarn.Show("Выбранный кодек не подходит для текущего формата или разрешения.", "Warrning");
                 return;
             }
 
             ToggleUi(false);
 
             progressBar.Minimum = 0;
-            progressBar.Maximum = _files.Count;
+            progressBar.Maximum = 100;
             progressBar.Value = 0;
 
             txtLog.Clear();
 
             try
             {
+                Dictionary<string, double> durations = new Dictionary<string, double>();
+                double totalDuration = 0.0;
+
+                int d;
+                for (d = 0; d < _files.Count; d++)
+                {
+                    string file = _files[d];
+                    double duration = await _ffprobeService.GetDurationSecondsAsync(FFprobePath, file);
+
+                    if (duration <= 0)
+                        duration = 1.0;
+
+                    durations[file] = duration;
+                    totalDuration += duration;
+                }
+
+                double processedBeforeCurrentFile = 0.0;
+
                 int i;
                 for (i = 0; i < _files.Count; i++)
                 {
@@ -380,7 +397,30 @@ namespace RetroVideoConverter
                     Log("Команда ffmpeg:");
                     Log(args);
 
-                    int exitCode = await _ffmpegService.ConvertAsync(FfmpegPath, args, Log);
+                    double currentFileDuration = durations[input];
+
+                    int exitCode = await _ffmpegService.ConvertAsync(
+                        FfmpegPath,
+                        args,
+                        Log,
+                        delegate (double currentSeconds)
+                        {
+                            double clampedCurrent = currentSeconds;
+
+                            if (clampedCurrent < 0)
+                                clampedCurrent = 0;
+
+                            if (clampedCurrent > currentFileDuration)
+                                clampedCurrent = currentFileDuration;
+
+                            double totalProcessed = processedBeforeCurrentFile + clampedCurrent;
+                            double percent = 0.0;
+
+                            if (totalDuration > 0)
+                                percent = (totalProcessed / totalDuration) * 100.0;
+
+                            SetProgressPercent(percent);
+                        });
 
                     if (exitCode == 0)
                     {
@@ -391,21 +431,46 @@ namespace RetroVideoConverter
                         Log("Ошибка конвертации: " + input + " (код " + exitCode + ")");
                     }
 
-                    progressBar.Value = i + 1;
+                    processedBeforeCurrentFile += currentFileDuration;
+
+                    double completedPercent = 0.0;
+                    if (totalDuration > 0)
+                        completedPercent = (processedBeforeCurrentFile / totalDuration) * 100.0;
+
+                    SetProgressPercent(completedPercent);
+
                     Log("------------------------------------------------------------");
                 }
 
-                MessageBox.Show("Конвертация завершена.");
+                SetProgressPercent(100);
+                MessageQuestion.Show("Конвертация завершена.");
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, "Ошибка");
+                MessageError.Show(ex.Message, "Ошибка");
                 Log("Исключение: " + ex);
             }
             finally
             {
                 ToggleUi(true);
             }
+        }
+
+        private void SetProgressPercent(double percent)
+        {
+            if (progressBar.InvokeRequired)
+            {
+                progressBar.BeginInvoke(new Action<double>(SetProgressPercent), percent);
+                return;
+            }
+
+            if (percent < 0)
+                percent = 0;
+
+            if (percent > 100)
+                percent = 100;
+
+            progressBar.Value = (int)percent;
         }
 
         private void ToggleUi(bool enabled)
@@ -431,6 +496,38 @@ namespace RetroVideoConverter
             }
 
             txtLog.AppendText(text + Environment.NewLine);
+        }
+
+        private void btnPreview_Click(object sender, EventArgs e)
+        {
+            int index = lstFiles.SelectedIndex;
+
+            if (index < 0)
+            {
+                MessageInfo.Show("Выбери файл из списка.", "Info");
+                return;
+            }
+
+            string input = _files[index];
+
+            if (!File.Exists(input))
+            {
+                MessageInfo.Show("Файл не найден.", "Info");
+                return;
+            }
+
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = input,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageError.Show("Ошибка открытия видео: " + ex.Message, "Error");
+            }
         }
     }
 }

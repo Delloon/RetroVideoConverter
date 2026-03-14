@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
 
@@ -51,6 +52,45 @@ namespace RetroVideoConverter.Services
                         height = 0;
 
                     return Tuple.Create(width, height);
+                }
+            });
+        }
+
+        public Task<double> GetDurationSecondsAsync(string ffprobePath, string inputPath)
+        {
+            return Task.Run(() =>
+            {
+                if (!File.Exists(ffprobePath))
+                    return 0.0;
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = ffprobePath,
+                    Arguments = "-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"" + inputPath + "\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using (var process = new Process())
+                {
+                    process.StartInfo = psi;
+                    process.Start();
+
+                    string output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit();
+
+                    if (string.IsNullOrWhiteSpace(output))
+                        return 0.0;
+
+                    output = output.Trim().Replace(",", ".");
+
+                    double seconds;
+                    if (!double.TryParse(output, NumberStyles.Any, CultureInfo.InvariantCulture, out seconds))
+                        seconds = 0.0;
+
+                    return seconds;
                 }
             });
         }
