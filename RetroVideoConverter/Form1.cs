@@ -443,7 +443,7 @@ namespace RetroVideoConverter
                 }
 
                 SetProgressPercent(100);
-                MessageQuestion.Show("Конвертация завершена.");
+                MessageInfo.Show("Конвертация завершена.");
             }
             catch (Exception ex)
             {
