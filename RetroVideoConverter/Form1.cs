@@ -37,6 +37,11 @@ namespace RetroVideoConverter
         {
             InitializeComponent();
 
+            this.FormBorderStyle = FormBorderStyle.FixedSingle;
+            this.MaximizeBox = false;
+            this.MinimumSize = this.Size;
+            this.MaximumSize = this.Size;
+
             btnAddFiles.Click += btnAddFiles_Click;
             btnRemoveSelected.Click += btnRemoveSelected_Click;
             btnBrowseOutput.Click += btnBrowseOutput_Click;
